@@ -173,7 +173,7 @@ _ssh_known_hosts_list() {
       }
 
       if (host) {
-        printf "%s|->|%s| | |[\\033[00;34mknown_hosts\\033[0m]\n", host, host
+        printf "%s|->|%s| | |[\033[00;34mknown_hosts\033[0m]\n", host, host
       }
     }
 
@@ -268,11 +268,11 @@ _ssh_host_list() {
       }
 
       if (tag) {
-        tag_formated = sprintf("[\\033[00;36m%s\\033[0m]", tag)
+        tag_formated = sprintf("[\033[00;36m%s\033[0m]", tag)
       }
 
       if (desc) {
-        desc_formated = sprintf("[\\033[00;34m%s\\033[0m]", desc)
+        desc_formated = sprintf("[\033[00;34m%s\033[0m]", desc)
       }
 
       n_aliases = split(aliases, alias_list, " ")
@@ -392,12 +392,132 @@ _fzf_list_generator() {
 
 _bash_ssh_extract_alias() {
   local row="$1"
+
+  # Protect readline from control bytes (notably CR) returned by some tty/fzf paths.
+  row="$(_bash_ssh_strip_controls "$row")"
   row="$(_bash_ssh_trim "$row")"
+
   printf '%s\n' "${row%% *}"
+}
+
+_bash_ssh_strip_controls() {
+  printf '%s' "$1" | command awk '{
+    gsub(/\r/, "", $0)
+    gsub(/[\001-\010\013\014\016-\037\177]/, "", $0)
+    printf "%s", $0
+  }'
+}
+
+_bash_ssh_restore_tty() {
+  local tty_state="$1"
+  local _drain _count=0
+
+  if [[ -n "$tty_state" ]]; then
+    stty "$tty_state" </dev/tty >/dev/tty 2>/dev/null || true
+  else
+    stty sane </dev/tty >/dev/tty 2>/dev/null || true
+  fi
+
+  # Force common interactive settings in case the saved state was unavailable.
+  stty echo icanon isig icrnl -inlcr -igncr opost onlcr </dev/tty >/dev/tty 2>/dev/null || true
+  command tput sgr0 >/dev/tty 2>/dev/null || true
+  command tput cnorm >/dev/tty 2>/dev/null || true
+  printf '\033[?2004l' >/dev/tty 2>/dev/null || true
+
+  # Drop queued control bytes (especially CR) that can leak after fzf exits.
+  while IFS= read -r -n 1 -t 0 _drain </dev/tty; do
+    ((_count++))
+    ((_count >= 64)) && break
+  done
+}
+
+_bash_ssh_run_fzf_tty() {
+  local host_list="$1"
+  local query="$2"
+  local input_file output_file default_command
+  local fzf_exit_code=1
+
+  input_file="$(mktemp "${TMPDIR:-/tmp}/bash-ssh-fzf-input.XXXXXX")" || return 1
+  output_file="$(mktemp "${TMPDIR:-/tmp}/bash-ssh-fzf-output.XXXXXX")" || {
+    rm -f "$input_file"
+    return 1
+  }
+
+  _fzf_list_generator "$host_list" >"$input_file"
+  printf -v default_command 'cat %q' "$input_file"
+
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    FZF_DEFAULT_COMMAND="$default_command" fzf \
+      --height 40% \
+      --ansi \
+      --border \
+      --cycle \
+      --info=inline \
+      --header-lines=2 \
+      --reverse \
+      --prompt='SSH Remote > ' \
+      --query="$query" \
+      --bind 'shift-tab:up,tab:down,bspace:backward-delete-char/eof' \
+      --preview 'ssh -T -G $(printf "%s" {} | command awk "{print \$1}") | command awk "BEGIN{IGNORECASE=1} /^User |^HostName |^Port |^ControlMaster |^ForwardAgent |^LocalForward |^IdentityFile |^RemoteForward |^ProxyCommand |^ProxyJump /" | (command -v column >/dev/null 2>&1 && column -t || cat)' \
+      --preview-window=right:40% \
+      --expect=alt-enter,enter \
+      </dev/tty >"$output_file" 2>/dev/tty
+    fzf_exit_code=$?
+  else
+    FZF_DEFAULT_COMMAND="$default_command" fzf \
+      --height 40% \
+      --ansi \
+      --border \
+      --cycle \
+      --info=inline \
+      --header-lines=2 \
+      --reverse \
+      --prompt='SSH Remote > ' \
+      --query="$query" \
+      --bind 'shift-tab:up,tab:down,bspace:backward-delete-char/eof' \
+      --preview 'ssh -T -G $(printf "%s" {} | command awk "{print \$1}") | command awk "BEGIN{IGNORECASE=1} /^User |^HostName |^Port |^ControlMaster |^ForwardAgent |^LocalForward |^IdentityFile |^RemoteForward |^ProxyCommand |^ProxyJump /" | (command -v column >/dev/null 2>&1 && column -t || cat)' \
+      --preview-window=right:40% \
+      --expect=alt-enter,enter \
+      >"$output_file"
+    fzf_exit_code=$?
+  fi
+
+  if (( fzf_exit_code == 0 )); then
+    command cat "$output_file"
+  fi
+
+  rm -f "$input_file" "$output_file"
+  return $fzf_exit_code
+}
+
+_bash_ssh_parse_fzf_selection() {
+  local raw="$1"
+  local line
+  local key_local=""
+  local selected_local=""
+
+  # Normalize potential CR-delimited output from older readline/tty paths.
+  raw="$(printf '%s' "$raw" | command awk '{ gsub(/\r/, "\n", $0); print }')"
+
+  while IFS= read -r line; do
+    line="$(_bash_ssh_strip_controls "$line")"
+    [[ -z "$line" ]] && continue
+
+    if [[ -z "$key_local" && ( "$line" == "enter" || "$line" == "alt-enter" ) ]]; then
+      key_local="$line"
+      continue
+    fi
+
+    selected_local="$line"
+  done <<< "$raw"
+
+  printf '%s\n%s\n' "$key_local" "$selected_local"
 }
 
 _bash_complete_ssh() {
   local cur selection key selected_line selected_alias
+  local parsed_output
+  local tty_state fzf_exit_code
   local -a args aliases
   local host_list
 
@@ -408,48 +528,48 @@ _bash_complete_ssh() {
     return 0
   fi
 
+  # Do not complete the command token itself; only complete ssh arguments.
+  if (( COMP_CWORD == 0 )); then
+    return 0
+  fi
+
   args=("${COMP_WORDS[@]:1}")
   host_list="$(_ssh_host_list "${args[@]}")"
   [[ -n "$host_list" ]] || return 0
 
-  mapfile -t aliases < <(printf '%s\n' "$host_list" | command awk -F '|' 'NF >= 1 && $1 !~ /^[[:space:]]*$/ { print $1 }')
+  aliases=()
+  while IFS= read -r selected_alias; do
+    selected_alias="$(_bash_ssh_strip_controls "$selected_alias")"
+    [[ -n "$selected_alias" ]] && aliases+=("$selected_alias")
+  done < <(printf '%s\n' "$host_list" | command awk -F '|' 'NF >= 1 && $1 !~ /^[[:space:]]*$/ { print $1 }')
 
   if ((${#aliases[@]} == 1)); then
     COMPREPLY=("${aliases[0]}")
-    compopt -o nospace 2>/dev/null || true
     return 0
   fi
 
   if command -v fzf >/dev/null 2>&1; then
-    selection="$(_fzf_list_generator "$host_list" | fzf \
-      --height 40% \
-      --ansi \
-      --border \
-      --cycle \
-      --info=inline \
-      --header-lines=2 \
-      --reverse \
-      --prompt='SSH Remote > ' \
-      --query="$cur" \
-      --bind 'shift-tab:up,tab:down,bspace:backward-delete-char/eof' \
-      --preview 'ssh -T -G $(printf "%s" {} | command awk "{print \$1}") | command awk "BEGIN{IGNORECASE=1} /^User |^HostName |^Port |^ControlMaster |^ForwardAgent |^LocalForward |^IdentityFile |^RemoteForward |^ProxyCommand |^ProxyJump /" | (command -v column >/dev/null 2>&1 && column -t || cat)' \
-      --preview-window=right:40% \
-      --expect=alt-enter,enter
-    )"
+    if [[ -t 1 ]] && command -v stty >/dev/null 2>&1; then
+      tty_state="$(stty -g </dev/tty 2>/dev/null || true)"
+    fi
+
+    selection="$(_bash_ssh_run_fzf_tty "$host_list" "$cur")"
+    fzf_exit_code=$?
+
+    _bash_ssh_restore_tty "$tty_state"
+
+    if (( fzf_exit_code != 0 )); then
+      return 0
+    fi
 
     if [[ -n "$selection" ]]; then
-      key="${selection%%$'\n'*}"
-      if [[ "$key" == "$selection" ]]; then
-        selected_line="$selection"
-        key=''
-      else
-        selected_line="${selection#*$'\n'}"
-      fi
+      parsed_output="$(_bash_ssh_parse_fzf_selection "$selection")"
+      key="${parsed_output%%$'\n'*}"
+      selected_line="${parsed_output#*$'\n'}"
 
       selected_alias="$(_bash_ssh_extract_alias "$selected_line")"
       if [[ -n "$selected_alias" ]]; then
         COMPREPLY=("$selected_alias")
-        compopt -o nospace 2>/dev/null || true
       fi
       return 0
     fi
