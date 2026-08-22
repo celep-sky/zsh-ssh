@@ -11,6 +11,7 @@ Better host completion for ssh in Zsh.
         - [Oh My Zsh](#oh-my-zsh)
         - [Sheldon](#sheldon)
         - [Manual (Git Clone)](#manual-git-clone)
+        - [Bash (Air-Gapped Ubuntu)](#bash-air-gapped-ubuntu)
     - [Usage](#usage)
         - [Configuration](#configuration)
         - [SSH Config Example](#ssh-config-example)
@@ -19,6 +20,12 @@ Better host completion for ssh in Zsh.
 
 Make sure you have [fzf](https://github.com/junegunn/fzf) installed.
 The `column` command is optional and only improves table/preview alignment; the plugin falls back to plain formatting when it is unavailable.
+
+For the Bash port (`bash-ssh.bash`) intended for air-gapped Ubuntu setups:
+
+- Required: `bash`, `ssh`, `awk`, `sort`, `fzf`
+- Optional: `grep`, `column`
+- Removed from runtime dependencies: `cut`, `wc`, `dirname`, `realpath`
 
 ### Zinit
 
@@ -76,6 +83,22 @@ antigen bundle sunlei/zsh-ssh
     ```
 
 3. Start a new terminal session.
+
+### Bash (Air-Gapped Ubuntu)
+
+1. Clone this repository somewhere on your machine. For example: `~/.bash/bash-ssh`.
+
+    ```shell
+    git clone https://github.com/sunlei/zsh-ssh ~/.bash/bash-ssh
+    ```
+
+2. Add the following to your `.bashrc`:
+
+    ```shell
+    source ~/.bash/bash-ssh/bash-ssh.bash
+    ```
+
+3. Start a new shell session (or run `source ~/.bashrc`).
 
 ## Usage
 
