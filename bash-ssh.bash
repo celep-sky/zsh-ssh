@@ -50,6 +50,22 @@ _bash_ssh_trim() {
   printf '%s' "$value"
 }
 
+# Strip one matching pair of surrounding quotes (no shell evaluation).
+_bash_ssh_unquote() {
+  local value="$1"
+  case "$value" in
+    \"*\")
+      value="${value#\"}"
+      value="${value%\"}"
+      ;;
+    \'*\')
+      value="${value#\'}"
+      value="${value%\'}"
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
 _bash_ssh_normalize_path() {
   local input="$1" path part
   local -a parts stack
@@ -81,7 +97,8 @@ _bash_ssh_normalize_path() {
     esac
   done
 
-  printf '/%s' "${stack[*]}" | tr ' ' '/'
+  local IFS='/'
+  printf '/%s' "${stack[*]}"
 }
 
 # Parse config recursively and resolve Include directives.
@@ -127,7 +144,7 @@ _parse_config_file() {
         include_paths=($rest)
 
         for raw_path in "${include_paths[@]}"; do
-          expanded="$(eval "printf '%s' $raw_path")"
+          expanded="$(_bash_ssh_unquote "$raw_path")"
 
           if [[ $expanded == ~* ]]; then
             expanded="${expanded/#~/$HOME}"
@@ -447,6 +464,11 @@ _bash_ssh_run_fzf_tty() {
   printf -v default_command 'cat %q' "$input_file"
 
   if [[ -r /dev/tty && -w /dev/tty ]]; then
+    # Draw fzf on the alternate screen so the terminal itself restores the
+    # exact prompt line and cursor position on exit, instead of relying on
+    # fzf's own manual redraw (which can desync and leave stale text behind).
+    command tput smcup >/dev/tty 2>/dev/null || true
+
     FZF_DEFAULT_COMMAND="$default_command" fzf \
       --height 40% \
       --ansi \
@@ -463,6 +485,8 @@ _bash_ssh_run_fzf_tty() {
       --expect=alt-enter,enter \
       </dev/tty >"$output_file" 2>/dev/tty
     fzf_exit_code=$?
+
+    command tput rmcup >/dev/tty 2>/dev/null || true
   else
     FZF_DEFAULT_COMMAND="$default_command" fzf \
       --height 40% \
