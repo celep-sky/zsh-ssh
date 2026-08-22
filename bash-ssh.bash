@@ -469,8 +469,10 @@ _bash_ssh_run_fzf_tty() {
     # fzf's own manual redraw (which can desync and leave stale text behind).
     command tput smcup >/dev/tty 2>/dev/null || true
 
+    # Full height: we're on the alternate screen now, so there's no
+    # scrollback to preserve and no reason to leave 60% of it blank.
     FZF_DEFAULT_COMMAND="$default_command" fzf \
-      --height 40% \
+      --height=100% \
       --ansi \
       --border \
       --cycle \
@@ -542,7 +544,7 @@ _bash_complete_ssh() {
   local cur selection key selected_line selected_alias
   local parsed_output
   local tty_state fzf_exit_code
-  local -a args aliases
+  local -a aliases
   local host_list
 
   COMPREPLY=()
@@ -557,8 +559,10 @@ _bash_complete_ssh() {
     return 0
   fi
 
-  args=("${COMP_WORDS[@]:1}")
-  host_list="$(_ssh_host_list "${args[@]}")"
+  # Filter on the word actually being completed, not the whole command
+  # line -- earlier tokens are typically values for flags like -p/-i/-J
+  # and would otherwise get mistaken for the search query.
+  host_list="$(_ssh_host_list "$cur")"
   [[ -n "$host_list" ]] || return 0
 
   aliases=()
