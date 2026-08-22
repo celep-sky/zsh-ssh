@@ -541,7 +541,7 @@ _bash_ssh_parse_fzf_selection() {
 }
 
 _bash_complete_ssh() {
-  local cur selection key selected_line selected_alias
+  local cur cur_host user_prefix selection key selected_line selected_alias
   local parsed_output
   local tty_state fzf_exit_code
   local -a aliases
@@ -559,10 +559,20 @@ _bash_complete_ssh() {
     return 0
   fi
 
+  # Split off a leading user@ prefix (e.g. "admin@prod") so filtering and
+  # matching operate on the host/alias part alone; the prefix is restored
+  # onto whatever alias ends up in COMPREPLY.
+  user_prefix=""
+  cur_host="$cur"
+  if [[ "$cur" == *@* ]]; then
+    user_prefix="${cur%%@*}@"
+    cur_host="${cur#*@}"
+  fi
+
   # Filter on the word actually being completed, not the whole command
   # line -- earlier tokens are typically values for flags like -p/-i/-J
   # and would otherwise get mistaken for the search query.
-  host_list="$(_ssh_host_list "$cur")"
+  host_list="$(_ssh_host_list "$cur_host")"
   [[ -n "$host_list" ]] || return 0
 
   aliases=()
@@ -572,7 +582,7 @@ _bash_complete_ssh() {
   done < <(printf '%s\n' "$host_list" | command awk -F '|' 'NF >= 1 && $1 !~ /^[[:space:]]*$/ { print $1 }')
 
   if ((${#aliases[@]} == 1)); then
-    COMPREPLY=("${aliases[0]}")
+    COMPREPLY=("${user_prefix}${aliases[0]}")
     return 0
   fi
 
@@ -581,7 +591,7 @@ _bash_complete_ssh() {
       tty_state="$(stty -g </dev/tty 2>/dev/null || true)"
     fi
 
-    selection="$(_bash_ssh_run_fzf_tty "$host_list" "$cur")"
+    selection="$(_bash_ssh_run_fzf_tty "$host_list" "$cur_host")"
     fzf_exit_code=$?
 
     _bash_ssh_restore_tty "$tty_state"
@@ -597,13 +607,19 @@ _bash_complete_ssh() {
 
       selected_alias="$(_bash_ssh_extract_alias "$selected_line")"
       if [[ -n "$selected_alias" ]]; then
-        COMPREPLY=("$selected_alias")
+        COMPREPLY=("${user_prefix}${selected_alias}")
       fi
       return 0
     fi
   fi
 
-  COMPREPLY=( $(compgen -W "${aliases[*]}" -- "$cur") )
+  COMPREPLY=( $(compgen -W "${aliases[*]}" -- "$cur_host") )
+  if [[ -n "$user_prefix" && ${#COMPREPLY[@]} -gt 0 ]]; then
+    local i
+    for i in "${!COMPREPLY[@]}"; do
+      COMPREPLY[$i]="${user_prefix}${COMPREPLY[$i]}"
+    done
+  fi
 }
 
 complete -o default -o bashdefault -F _bash_complete_ssh ssh
