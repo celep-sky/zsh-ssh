@@ -545,7 +545,7 @@ _bash_complete_ssh() {
   local parsed_output
   local tty_state fzf_exit_code
   local -a aliases
-  local host_list
+  local host_list bash_hostnames
 
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
@@ -573,7 +573,19 @@ _bash_complete_ssh() {
   # line -- earlier tokens are typically values for flags like -p/-i/-J
   # and would otherwise get mistaken for the search query.
   host_list="$(_ssh_host_list "$cur_host")"
-  [[ -n "$host_list" ]] || return 0
+  bash_hostnames="$(compgen -A hostname -- "$cur_host")"
+  if [[ -n "$bash_hostnames" ]]; then
+    while IFS= read -r selected_alias; do
+      [[ -n "$selected_alias" ]] || continue
+      host_list+=$'\n'"$selected_alias|->|$selected_alias| | |[bash hostname]"
+    done <<< "$bash_hostnames"
+  fi
+
+  if [[ -n "$host_list" ]]; then
+    host_list="$(printf '%s\n' "$host_list" | command awk -F '|' '!seen[$1]++')"
+  else
+    return 0
+  fi
 
   aliases=()
   while IFS= read -r selected_alias; do
